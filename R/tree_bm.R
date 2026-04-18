@@ -78,8 +78,13 @@ ebnm_tree_bm_fn <- function(tree, tree_index = NULL) {
 #' @export
 #'
 tree_bm_precomp <- function(tree) {
+  idx <- .tree_phylo_precomp(tree)
+  structure(idx, class = c("tree_bm_index", class(idx)))
+}
+
+.tree_phylo_precomp <- function(tree) {
   if (!requireNamespace("ape", quietly = TRUE)) {
-    stop("Package 'ape' must be installed to use tree_bm_precomp.")
+    stop("Package 'ape' must be installed to pre-compute tree structure.")
   }
   if (!inherits(tree, "phylo")) {
     stop("tree must be an object of class 'phylo'.")
@@ -117,19 +122,16 @@ tree_bm_precomp <- function(tree) {
   tree_pre     <- ape::reorder.phylo(tree, order = "cladewise")
   internal_pre <- unique(tree_pre$edge[, 1])
 
-  structure(
-    list(
-      ntip              = ntip,
-      nnode             = nnode,
-      total_nodes       = total_nodes,
-      root              = root,
-      tip.label         = tree$tip.label,
-      edge_len_to_child = edge_len_to_child,
-      children          = children,
-      internal_post     = internal_post,
-      internal_pre      = internal_pre
-    ),
-    class = "tree_bm_index"
+  list(
+    ntip              = ntip,
+    nnode             = nnode,
+    total_nodes       = total_nodes,
+    root              = root,
+    tip.label         = tree$tip.label,
+    edge_len_to_child = edge_len_to_child,
+    children          = children,
+    internal_post     = internal_post,
+    internal_pre      = internal_pre
   )
 }
 
