@@ -56,7 +56,7 @@ static GaussMsg combine_messages(const std::vector<double>& means,
 List tree_bm_compute_cpp(
     int ntip,
     int total_nodes,
-    int root,
+    IntegerVector roots,
     NumericVector y,
     NumericVector s2,
     NumericVector edge_len_to_child,
@@ -65,8 +65,6 @@ List tree_bm_compute_cpp(
     IntegerVector internal_pre,
     double bm_var
 ) {
-  int r = root - 1;  // 0-based root index
-
   NumericVector up_mean(total_nodes);
   NumericVector up_var(total_nodes);
   NumericVector up_logconst(total_nodes, 0.0);
@@ -100,14 +98,23 @@ List tree_bm_compute_cpp(
     up_logconst[v] = sum_lc + comb.log_const;
   }
 
-  // Log-likelihood: root fixed at 0, so marginal of messages at root is
-  // N(0; up_mean[root], up_var[root]) times accumulated constants.
-  double m_root = up_mean[r];
-  double v_root = up_var[r];
-  double lc_root = up_logconst[r];
-  double loglik = lc_root
-    - 0.5 * std::log(2.0 * M_PI * v_root)
-    - 0.5 * m_root * m_root / v_root;
+  std::vector<int> roots0(roots.size());
+  std::vector<bool> is_root(total_nodes, false);
+  for (int k = 0; k < roots.size(); ++k) {
+    roots0[k] = roots[k] - 1;
+    is_root[roots0[k]] = true;
+  }
+
+  double loglik = 0.0;
+  for (int k = 0; k < (int)roots0.size(); ++k) {
+    int r = roots0[k];
+    double m_root = up_mean[r];
+    double v_root = up_var[r];
+    double lc_root = up_logconst[r];
+    loglik += lc_root
+      - 0.5 * std::log(2.0 * M_PI * v_root)
+      - 0.5 * m_root * m_root / v_root;
+  }
 
   // Downward pass: compute outside (top-down) messages for each node.
   NumericVector out_mean(total_nodes, 0.0);
@@ -115,18 +122,21 @@ List tree_bm_compute_cpp(
 
   // Root is fixed at 0: its children receive a point-mass-at-0 message
   // propagated through the edge, giving out_var[c] = bm_var * edge_len[c].
-  IntegerVector root_ch = as<IntegerVector>(children[r]);
-  for (int j = 0; j < root_ch.size(); ++j) {
-    int c = root_ch[j] - 1;
-    out_mean[c] = 0.0;
-    out_var[c] = bm_var * edge_len_to_child[c];
+  for (int k = 0; k < (int)roots0.size(); ++k) {
+    int r = roots0[k];
+    IntegerVector root_ch = as<IntegerVector>(children[r]);
+    for (int j = 0; j < root_ch.size(); ++j) {
+      int c = root_ch[j] - 1;
+      out_mean[c] = 0.0;
+      out_var[c] = bm_var * edge_len_to_child[c];
+    }
   }
 
   // For all other internal nodes (preorder, skip root)
   int n_pre = internal_pre.size();
   for (int ki = 0; ki < n_pre; ++ki) {
     int p = internal_pre[ki] - 1;
-    if (p == r) continue;
+    if (is_root[p]) continue;
 
     IntegerVector ch_r_vec = as<IntegerVector>(children[p]);
     int nch = ch_r_vec.size();
@@ -194,7 +204,7 @@ List tree_bm_compute_cpp(
 List tree_ou_compute_cpp(
     int ntip,
     int total_nodes,
-    int root,
+    IntegerVector roots,
     NumericVector y,
     NumericVector s2,
     NumericVector edge_len_to_child,
@@ -204,8 +214,6 @@ List tree_ou_compute_cpp(
     double alpha,
     double stationary_var
 ) {
-  int r = root - 1;
-
   NumericVector up_mean(total_nodes);
   NumericVector up_var(total_nodes);
   NumericVector up_logconst(total_nodes, 0.0);
@@ -241,18 +249,27 @@ List tree_ou_compute_cpp(
     up_logconst[v] = sum_lc + comb.log_const;
   }
 
-  std::vector<double> root_means(2), root_vars(2);
-  root_means[0] = 0.0;
-  root_vars[0] = stationary_var;
-  root_means[1] = up_mean[r];
-  root_vars[1] = up_var[r];
-  GaussMsg root_comb = combine_messages(root_means, root_vars);
-  double loglik = up_logconst[r] + root_comb.log_const;
+  std::vector<int> roots0(roots.size());
+  double loglik = 0.0;
+  for (int k = 0; k < roots.size(); ++k) {
+    int r = roots[k] - 1;
+    roots0[k] = r;
+    std::vector<double> root_means(2), root_vars(2);
+    root_means[0] = 0.0;
+    root_vars[0] = stationary_var;
+    root_means[1] = up_mean[r];
+    root_vars[1] = up_var[r];
+    GaussMsg root_comb = combine_messages(root_means, root_vars);
+    loglik += up_logconst[r] + root_comb.log_const;
+  }
 
   NumericVector out_mean(total_nodes, 0.0);
   NumericVector out_var(total_nodes, 0.0);
-  out_mean[r] = 0.0;
-  out_var[r] = stationary_var;
+  for (int k = 0; k < (int)roots0.size(); ++k) {
+    int r = roots0[k];
+    out_mean[r] = 0.0;
+    out_var[r] = stationary_var;
+  }
 
   int n_pre = internal_pre.size();
   for (int ki = 0; ki < n_pre; ++ki) {

@@ -11,14 +11,14 @@ Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
 // tree_bm_compute_cpp
-List tree_bm_compute_cpp(int ntip, int total_nodes, int root, NumericVector y, NumericVector s2, NumericVector edge_len_to_child, List children, IntegerVector internal_post, IntegerVector internal_pre, double bm_var);
-RcppExport SEXP _ebnm_tree_bm_compute_cpp(SEXP ntipSEXP, SEXP total_nodesSEXP, SEXP rootSEXP, SEXP ySEXP, SEXP s2SEXP, SEXP edge_len_to_childSEXP, SEXP childrenSEXP, SEXP internal_postSEXP, SEXP internal_preSEXP, SEXP bm_varSEXP) {
+List tree_bm_compute_cpp(int ntip, int total_nodes, IntegerVector roots, NumericVector y, NumericVector s2, NumericVector edge_len_to_child, List children, IntegerVector internal_post, IntegerVector internal_pre, double bm_var);
+RcppExport SEXP _ebnm_tree_bm_compute_cpp(SEXP ntipSEXP, SEXP total_nodesSEXP, SEXP rootsSEXP, SEXP ySEXP, SEXP s2SEXP, SEXP edge_len_to_childSEXP, SEXP childrenSEXP, SEXP internal_postSEXP, SEXP internal_preSEXP, SEXP bm_varSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< int >::type ntip(ntipSEXP);
     Rcpp::traits::input_parameter< int >::type total_nodes(total_nodesSEXP);
-    Rcpp::traits::input_parameter< int >::type root(rootSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type roots(rootsSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type y(ySEXP);
     Rcpp::traits::input_parameter< NumericVector >::type s2(s2SEXP);
     Rcpp::traits::input_parameter< NumericVector >::type edge_len_to_child(edge_len_to_childSEXP);
@@ -26,19 +26,19 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< IntegerVector >::type internal_post(internal_postSEXP);
     Rcpp::traits::input_parameter< IntegerVector >::type internal_pre(internal_preSEXP);
     Rcpp::traits::input_parameter< double >::type bm_var(bm_varSEXP);
-    rcpp_result_gen = Rcpp::wrap(tree_bm_compute_cpp(ntip, total_nodes, root, y, s2, edge_len_to_child, children, internal_post, internal_pre, bm_var));
+    rcpp_result_gen = Rcpp::wrap(tree_bm_compute_cpp(ntip, total_nodes, roots, y, s2, edge_len_to_child, children, internal_post, internal_pre, bm_var));
     return rcpp_result_gen;
 END_RCPP
 }
 // tree_ou_compute_cpp
-List tree_ou_compute_cpp(int ntip, int total_nodes, int root, NumericVector y, NumericVector s2, NumericVector edge_len_to_child, List children, IntegerVector internal_post, IntegerVector internal_pre, double alpha, double stationary_var);
-RcppExport SEXP _ebnm_tree_ou_compute_cpp(SEXP ntipSEXP, SEXP total_nodesSEXP, SEXP rootSEXP, SEXP ySEXP, SEXP s2SEXP, SEXP edge_len_to_childSEXP, SEXP childrenSEXP, SEXP internal_postSEXP, SEXP internal_preSEXP, SEXP alphaSEXP, SEXP stationary_varSEXP) {
+List tree_ou_compute_cpp(int ntip, int total_nodes, IntegerVector roots, NumericVector y, NumericVector s2, NumericVector edge_len_to_child, List children, IntegerVector internal_post, IntegerVector internal_pre, double alpha, double stationary_var);
+RcppExport SEXP _ebnm_tree_ou_compute_cpp(SEXP ntipSEXP, SEXP total_nodesSEXP, SEXP rootsSEXP, SEXP ySEXP, SEXP s2SEXP, SEXP edge_len_to_childSEXP, SEXP childrenSEXP, SEXP internal_postSEXP, SEXP internal_preSEXP, SEXP alphaSEXP, SEXP stationary_varSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< int >::type ntip(ntipSEXP);
     Rcpp::traits::input_parameter< int >::type total_nodes(total_nodesSEXP);
-    Rcpp::traits::input_parameter< int >::type root(rootSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type roots(rootsSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type y(ySEXP);
     Rcpp::traits::input_parameter< NumericVector >::type s2(s2SEXP);
     Rcpp::traits::input_parameter< NumericVector >::type edge_len_to_child(edge_len_to_childSEXP);
@@ -47,7 +47,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< IntegerVector >::type internal_pre(internal_preSEXP);
     Rcpp::traits::input_parameter< double >::type alpha(alphaSEXP);
     Rcpp::traits::input_parameter< double >::type stationary_var(stationary_varSEXP);
-    rcpp_result_gen = Rcpp::wrap(tree_ou_compute_cpp(ntip, total_nodes, root, y, s2, edge_len_to_child, children, internal_post, internal_pre, alpha, stationary_var));
+    rcpp_result_gen = Rcpp::wrap(tree_ou_compute_cpp(ntip, total_nodes, roots, y, s2, edge_len_to_child, children, internal_post, internal_pre, alpha, stationary_var));
     return rcpp_result_gen;
 END_RCPP
 }

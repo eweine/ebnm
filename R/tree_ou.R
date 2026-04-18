@@ -33,7 +33,8 @@ tree_ou <- function(alpha, stationary_var) {
 #' \code{tree_index} are captured in the closure, so they are built only once
 #' even when the function is called many times inside an iterative algorithm.
 #'
-#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}.
+#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}},
+#'   or a list of rooted \code{phylo} objects representing independent trees.
 #' @param tree_index An optional pre-computed index from
 #'   \code{\link{tree_ou_precomp}}. If \code{NULL} (default), it is built
 #'   automatically from \code{tree}.
@@ -67,13 +68,14 @@ ebnm_tree_ou_fn <- function(tree, tree_index = NULL) {
 
 #' Pre-compute tree structure for repeated ebnm_tree_ou calls
 #'
-#' Builds the message-passing index for a phylogenetic tree. Passing this
+#' Builds the message-passing index for a phylogenetic tree or forest. Passing this
 #' pre-computed index to \code{\link{ebnm_tree_ou}} via the \code{tree_index}
 #' argument avoids rebuilding it on every call, which is important when
 #' \code{ebnm_tree_ou} is used iteratively (e.g., as a prior in an
 #' alternating optimization).
 #'
-#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}.
+#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}},
+#'   or a list of rooted \code{phylo} objects representing independent trees.
 #'
 #' @return A list of class \code{tree_ou_index} containing the pre-computed
 #'   tree structure needed by \code{\link{ebnm_tree_ou}}.
@@ -90,7 +92,7 @@ tree_ou_precomp <- function(tree) {
 #'
 #' Implements an empirical Bayes normal means solver where the prior on tip
 #' states is induced by a mean-zero Ornstein-Uhlenbeck process unfolding on a
-#' phylogenetic tree. The root state is drawn from the stationary distribution
+#' phylogenetic tree or forest. Each root state is drawn from the stationary distribution
 #' of the OU process, and two parameters are estimated by marginal maximum
 #' likelihood: the reversion rate \eqn{\alpha} and stationary variance
 #' \eqn{\tau^2}.
@@ -115,8 +117,9 @@ tree_ou_precomp <- function(tree) {
 #'   strictly positive. Vectors of any other length are an error.
 #'
 #' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}
-#'   (from package \code{ape}). Must be rooted and have positive branch
-#'   lengths.
+#'   (from package \code{ape}), or a list of rooted \code{phylo} objects.
+#'   Trees must be rooted and have positive branch lengths. Different trees
+#'   are modeled as prior-independent.
 #'
 #' @param tree_index An optional pre-computed index returned by
 #'   \code{\link{tree_ou_precomp}}. When \code{ebnm_tree_ou} is called
@@ -192,7 +195,7 @@ ebnm_tree_ou <- function(
     fit <- tree_ou_compute_cpp(
       ntip = idx$ntip,
       total_nodes = idx$total_nodes,
-      root = idx$root,
+      roots = idx$root,
       y = y,
       s2 = s2,
       edge_len_to_child = idx$edge_len_to_child,
@@ -211,7 +214,7 @@ ebnm_tree_ou <- function(
       -tree_ou_compute_cpp(
         ntip = idx$ntip,
         total_nodes = idx$total_nodes,
-        root = idx$root,
+        roots = idx$root,
         y = y,
         s2 = s2,
         edge_len_to_child = idx$edge_len_to_child,
@@ -244,7 +247,7 @@ ebnm_tree_ou <- function(
     fit <- tree_ou_compute_cpp(
       ntip = idx$ntip,
       total_nodes = idx$total_nodes,
-      root = idx$root,
+      roots = idx$root,
       y = y,
       s2 = s2,
       edge_len_to_child = idx$edge_len_to_child,
