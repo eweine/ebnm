@@ -8,6 +8,7 @@ ebnm_tree_bm(
   x,
   s = 1,
   tree,
+  tree_index = NULL,
   g_init = NULL,
   fix_g = FALSE,
   output = ebnm_output_default(),
@@ -19,12 +20,19 @@ ebnm_tree_bm(
 must match \code{tree$tip.label}; output is always in
 \code{tree$tip.label} order.}
 
-\item{s}{A vector of standard errors (or a scalar if all are equal).
-Must be strictly positive.}
+\item{s}{A scalar standard error applied to all tips, or a vector of
+per-tip standard errors of the same length as \code{x}. Must be
+strictly positive. Vectors of any other length are an error.}
 
 \item{tree}{A rooted phylogenetic tree of class \code{\link[ape]{phylo}}
 (from package \code{ape}). Must be rooted and have positive branch
 lengths.}
+
+\item{tree_index}{An optional pre-computed index returned by
+\code{\link{tree_bm_precomp}}. When \code{ebnm_tree_bm} is called
+repeatedly on the same tree (e.g., inside an iterative algorithm),
+building the index once and passing it here avoids rebuilding it on
+every call.}
 
 \item{g_init}{An optional \code{tree_bm} object (or an \code{ebnm} object
 whose \code{fitted_g} is a \code{tree_bm}) specifying an initial or
@@ -40,8 +48,9 @@ further optimization. Requires \code{g_init} to be specified.}
 \code{"posterior_sampler"} option is not supported and will be ignored.}
 
 \item{control}{A named list of control parameters passed to
-\code{\link[stats]{optim}} (method \code{"L-BFGS-B"}) during
-optimization of \eqn{\sigma^2}. Ignored when \code{fix_g = TRUE}.}
+\code{\link[stats]{optimize}} during optimization of \eqn{\sigma^2}.
+Supported fields are \code{lower}, \code{upper}, and \code{tol}.
+Ignored when \code{fix_g = TRUE}.}
 }
 \value{
 An \code{ebnm} object. See \code{\link{ebnm}} for the structure of
@@ -68,5 +77,6 @@ Marginal likelihood and posteriors are computed via an efficient
 upward-downward message-passing algorithm implemented in C++.
 }
 \seealso{
-\code{\link{ebnm}}, \code{\link{tree_bm}}
+\code{\link{ebnm}}, \code{\link{tree_bm}},
+  \code{\link{tree_bm_precomp}}
 }

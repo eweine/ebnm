@@ -17,6 +17,122 @@ tree_bm <- function(bm_var) {
   structure(list(bm_var = bm_var), class = "tree_bm")
 }
 
+#' Create a flashier-compatible ebnm function for the tree BM prior
+#'
+#' Returns a closure with the signature \code{function(x, s, g_init, fix_g,
+#' output)} expected by \pkg{flashier}. The \code{tree} and the pre-computed
+#' \code{tree_index} are captured in the closure, so they are built only once
+#' even when the function is called many times inside an iterative algorithm.
+#'
+#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}.
+#' @param tree_index An optional pre-computed index from
+#'   \code{\link{tree_bm_precomp}}. If \code{NULL} (default), it is built
+#'   automatically from \code{tree}.
+#'
+#' @return A function suitable for use as the \code{ebnm_fn} argument to
+#'   \code{\link[flashier]{flash}} or \code{\link[flashier]{flash_greedy}}.
+#'
+#' @seealso \code{\link{ebnm_tree_bm}}, \code{\link{tree_bm_precomp}}
+#'
+#' @export
+#'
+ebnm_tree_bm_fn <- function(tree, tree_index = NULL) {
+  if (is.null(tree_index)) {
+    tree_index <- tree_bm_precomp(tree)
+  }
+  ntip <- tree_index$ntip
+  function(x, s, g_init = NULL, fix_g = FALSE, output) {
+    if (length(x) != ntip) {
+      # flashier validates ebnm functions by calling them with a synthetic
+      # 3-element vector; fall back to a symmetric normal prior so the check
+      # passes and the correct dim.signs = 0 is reported.
+      return(ebnm_normal(x, s, g_init = NULL, fix_g = FALSE, output = output))
+    }
+    ebnm_tree_bm(
+      x = x,
+      s = s,
+      tree = tree,
+      tree_index = tree_index,
+      g_init = g_init,
+      fix_g = fix_g,
+      output = output
+    )
+  }
+}
+
+#' Pre-compute tree structure for repeated ebnm_tree_bm calls
+#'
+#' Builds the message-passing index for a phylogenetic tree. Passing this
+#' pre-computed index to \code{\link{ebnm_tree_bm}} via the \code{tree_index}
+#' argument avoids rebuilding it on every call, which is important when
+#' \code{ebnm_tree_bm} is used iteratively (e.g., as a prior in an
+#' alternating optimization).
+#'
+#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}.
+#'
+#' @return A list of class \code{tree_bm_index} containing the pre-computed
+#'   tree structure needed by \code{\link{ebnm_tree_bm}}.
+#'
+#' @seealso \code{\link{ebnm_tree_bm}}
+#'
+#' @export
+#'
+tree_bm_precomp <- function(tree) {
+  if (!requireNamespace("ape", quietly = TRUE)) {
+    stop("Package 'ape' must be installed to use tree_bm_precomp.")
+  }
+  if (!inherits(tree, "phylo")) {
+    stop("tree must be an object of class 'phylo'.")
+  }
+  if (!ape::is.rooted(tree)) {
+    stop("tree must be rooted.")
+  }
+
+  ntip  <- ape::Ntip(tree)
+  nnode <- tree$Nnode
+  total_nodes <- ntip + nnode
+
+  edge     <- tree$edge
+  edge_len <- tree$edge.length
+
+  root <- setdiff(edge[, 1], edge[, 2])
+  if (length(root) != 1L) {
+    stop("Could not identify a unique root node.")
+  }
+
+  edge_len_to_child <- rep(NA_real_, total_nodes)
+  children <- vector("list", total_nodes)
+
+  for (i in seq_len(nrow(edge))) {
+    p  <- edge[i, 1]
+    ch <- edge[i, 2]
+    edge_len_to_child[ch] <- edge_len[i]
+    children[[p]] <- c(children[[p]], ch)
+  }
+
+  tree_post     <- ape::reorder.phylo(tree, order = "postorder")
+  post_pars     <- tree_post$edge[, 1]
+  internal_post <- post_pars[!duplicated(post_pars, fromLast = TRUE)]
+
+  tree_pre     <- ape::reorder.phylo(tree, order = "cladewise")
+  internal_pre <- unique(tree_pre$edge[, 1])
+
+  structure(
+    list(
+      ntip              = ntip,
+      nnode             = nnode,
+      total_nodes       = total_nodes,
+      root              = root,
+      tip.label         = tree$tip.label,
+      edge_len_to_child = edge_len_to_child,
+      children          = children,
+      internal_post     = internal_post,
+      internal_pre      = internal_pre
+    ),
+    class = "tree_bm_index"
+  )
+}
+
 #' Solve the EBNM problem using a Brownian motion tree prior
 #'
 #' Implements an empirical Bayes normal means solver where the prior on tip
@@ -39,12 +155,19 @@ tree_bm <- function(bm_var) {
 #'   must match \code{tree$tip.label}; output is always in
 #'   \code{tree$tip.label} order.
 #'
-#' @param s A vector of standard errors (or a scalar if all are equal).
-#'   Must be strictly positive.
+#' @param s A scalar standard error applied to all tips, or a vector of
+#'   per-tip standard errors of the same length as \code{x}. Must be
+#'   strictly positive. Vectors of any other length are an error.
 #'
 #' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}
 #'   (from package \code{ape}). Must be rooted and have positive branch
 #'   lengths.
+#'
+#' @param tree_index An optional pre-computed index returned by
+#'   \code{\link{tree_bm_precomp}}. When \code{ebnm_tree_bm} is called
+#'   repeatedly on the same tree (e.g., inside an iterative algorithm),
+#'   building the index once and passing it here avoids rebuilding it on
+#'   every call.
 #'
 #' @param g_init An optional \code{tree_bm} object (or an \code{ebnm} object
 #'   whose \code{fitted_g} is a \code{tree_bm}) specifying an initial or
@@ -69,7 +192,8 @@ tree_bm <- function(bm_var) {
 #'   a single field \code{bm_var}. Local false sign rates (\code{lfsr}) are
 #'   computed assuming a symmetric (Gaussian) posterior.
 #'
-#' @seealso \code{\link{ebnm}}, \code{\link{tree_bm}}
+#' @seealso \code{\link{ebnm}}, \code{\link{tree_bm}},
+#'   \code{\link{tree_bm_precomp}}
 #'
 #' @export
 #'
@@ -77,6 +201,7 @@ ebnm_tree_bm <- function(
     x,
     s = 1,
     tree,
+    tree_index = NULL,
     g_init = NULL,
     fix_g = FALSE,
     output = ebnm_output_default(),
@@ -89,16 +214,21 @@ ebnm_tree_bm <- function(
   call <- match.call()
 
   # Validate and align data to tree tip order
-  n_tips <- ape::Ntip(tree)
-  s_vec <- rep(s, length.out = n_tips)
-  dat <- .tbm_align_data(tree, x, s_vec)
+  dat <- .tbm_align_data(tree, x, s)
   y <- dat$y
   sv <- dat$s
   s2 <- sv^2
   tip.label <- dat$tip.label
 
-  # Build tree index for message passing
-  idx <- .tbm_build_index(tree)
+  # Use pre-computed index if supplied, otherwise build it now
+  if (!is.null(tree_index)) {
+    if (!inherits(tree_index, "tree_bm_index")) {
+      stop("tree_index must be an object returned by tree_bm_precomp().")
+    }
+    idx <- tree_index
+  } else {
+    idx <- tree_bm_precomp(tree)
+  }
 
   # Validate g_init
   if (inherits(g_init, "ebnm")) {
@@ -232,22 +362,33 @@ ebnm_tree_bm <- function(
   }
 
   n <- ape::Ntip(tree)
+  s_scalar <- (length(s) == 1L)
+  if (s_scalar) s <- rep(s, n)
+
   if (length(y) != n || length(s) != n) {
     stop("y and s must each have length equal to the number of tips in tree.")
   }
 
-  if (!is.null(names(y)) || !is.null(names(s))) {
-    if (is.null(names(y)) || is.null(names(s))) {
-      stop("If either y or s is named, both must be named.")
-    }
+  if (!is.null(names(y))) {
     if (!all(tree$tip.label %in% names(y))) {
       stop("All tree tip labels must appear in names(y).")
     }
-    if (!all(tree$tip.label %in% names(s))) {
-      stop("All tree tip labels must appear in names(s).")
+    # Permutation that puts y into tree$tip.label order
+    perm <- match(tree$tip.label, names(y))
+    y <- y[perm]
+    if (!is.null(names(s)) && !s_scalar) {
+      # s is a named vector: reorder it independently by name
+      if (!all(tree$tip.label %in% names(s))) {
+        stop("All tree tip labels must appear in names(s).")
+      }
+      s <- s[tree$tip.label]
+    } else {
+      # s is a scalar (already expanded) or unnamed vector: apply same
+      # permutation as y so that s[i] stays paired with its y[i]
+      s <- s[perm]
     }
-    y <- y[tree$tip.label]
-    s <- s[tree$tip.label]
+  } else if (!is.null(names(s)) && !s_scalar) {
+    stop("If s is a named vector, y must also be named.")
   } else {
     names(y) <- tree$tip.label
     names(s) <- tree$tip.label
@@ -258,50 +399,6 @@ ebnm_tree_bm <- function(
   if (any(s <= 0)) stop("All s must be strictly positive.")
 
   list(y = as.numeric(y), s = as.numeric(s), tip.label = tree$tip.label)
-}
-
-.tbm_build_index <- function(tree) {
-  ntip  <- ape::Ntip(tree)
-  nnode <- tree$Nnode
-  total_nodes <- ntip + nnode
-
-  edge     <- tree$edge
-  edge_len <- tree$edge.length
-
-  root <- setdiff(edge[, 1], edge[, 2])
-  if (length(root) != 1L) {
-    stop("Could not identify a unique root node.")
-  }
-
-  edge_len_to_child <- rep(NA_real_, total_nodes)
-  children <- vector("list", total_nodes)
-
-  for (i in seq_len(nrow(edge))) {
-    p  <- edge[i, 1]
-    ch <- edge[i, 2]
-    edge_len_to_child[ch] <- edge_len[i]
-    children[[p]] <- c(children[[p]], ch)
-  }
-
-  # Postorder: process children before parents
-  tree_post  <- ape::reorder.phylo(tree, order = "postorder")
-  post_pars  <- tree_post$edge[, 1]
-  internal_post <- post_pars[!duplicated(post_pars, fromLast = TRUE)]
-
-  # Preorder: process parents before children
-  tree_pre   <- ape::reorder.phylo(tree, order = "cladewise")
-  internal_pre <- unique(tree_pre$edge[, 1])
-
-  list(
-    ntip          = ntip,
-    nnode         = nnode,
-    total_nodes   = total_nodes,
-    root          = root,
-    edge_len_to_child = edge_len_to_child,
-    children      = children,
-    internal_post = internal_post,
-    internal_pre  = internal_pre
-  )
 }
 
 # Upper bound for bm_var search: data variance divided by minimum edge length.
