@@ -1,0 +1,314 @@
+#' Constructor for tree_bm prior class
+#'
+#' Creates a Brownian motion tree prior object storing the estimated diffusion
+#' variance.
+#'
+#' @param bm_var A positive scalar: the Brownian motion variance per unit
+#'   branch length.
+#'
+#' @return An object of class \code{tree_bm}.
+#'
+#' @export
+#'
+tree_bm <- function(bm_var) {
+  if (!is.numeric(bm_var) || length(bm_var) != 1 || bm_var <= 0) {
+    stop("bm_var must be a single positive number.")
+  }
+  structure(list(bm_var = bm_var), class = "tree_bm")
+}
+
+#' Solve the EBNM problem using a Brownian motion tree prior
+#'
+#' Implements an empirical Bayes normal means solver where the prior on tip
+#' states is induced by a Brownian motion process unfolding on a phylogenetic
+#' tree. The root state is fixed at zero, and a single variance parameter
+#' \eqn{\sigma^2} (the diffusion variance per unit branch length) is estimated
+#' by marginal maximum likelihood.
+#'
+#' The model is:
+#' \deqn{x_\text{root} = 0}
+#' \deqn{x_\text{child} | x_\text{parent} \sim
+#'   N(x_\text{parent},\; \sigma^2 \cdot \ell)}
+#' \deqn{y_i | x_i \sim N(x_i, s_i^2)}
+#'
+#' where \eqn{\ell} is the branch length connecting parent to child.
+#' Marginal likelihood and posteriors are computed via an efficient
+#' upward-downward message-passing algorithm implemented in C++.
+#'
+#' @param x A numeric vector of observations at tree tips. If named, names
+#'   must match \code{tree$tip.label}; output is always in
+#'   \code{tree$tip.label} order.
+#'
+#' @param s A vector of standard errors (or a scalar if all are equal).
+#'   Must be strictly positive.
+#'
+#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}
+#'   (from package \code{ape}). Must be rooted and have positive branch
+#'   lengths.
+#'
+#' @param g_init An optional \code{tree_bm} object (or an \code{ebnm} object
+#'   whose \code{fitted_g} is a \code{tree_bm}) specifying an initial or
+#'   fixed prior. If \code{fix_g = FALSE}, \code{g_init$bm_var} is used as
+#'   the starting point for optimization.
+#'
+#' @param fix_g If \code{TRUE}, fix the prior at \code{g_init} without
+#'   further optimization. Requires \code{g_init} to be specified.
+#'
+#' @param output A character vector of values to return. Use
+#'   \code{\link{ebnm_output_default}} for defaults or
+#'   \code{\link{ebnm_output_all}} for all options. The
+#'   \code{"posterior_sampler"} option is not supported and will be ignored.
+#'
+#' @param control A named list of control parameters passed to
+#'   \code{\link[stats]{optimize}} during optimization of \eqn{\sigma^2}.
+#'   Supported fields are \code{lower}, \code{upper}, and \code{tol}.
+#'   Ignored when \code{fix_g = TRUE}.
+#'
+#' @return An \code{ebnm} object. See \code{\link{ebnm}} for the structure of
+#'   this object. The \code{fitted_g} element is a \code{tree_bm} object with
+#'   a single field \code{bm_var}. Local false sign rates (\code{lfsr}) are
+#'   computed assuming a symmetric (Gaussian) posterior.
+#'
+#' @seealso \code{\link{ebnm}}, \code{\link{tree_bm}}
+#'
+#' @export
+#'
+ebnm_tree_bm <- function(
+    x,
+    s = 1,
+    tree,
+    g_init = NULL,
+    fix_g = FALSE,
+    output = ebnm_output_default(),
+    control = NULL
+) {
+  if (!requireNamespace("ape", quietly = TRUE)) {
+    stop("Package 'ape' must be installed to use ebnm_tree_bm.")
+  }
+
+  call <- match.call()
+
+  # Validate and align data to tree tip order
+  n_tips <- ape::Ntip(tree)
+  s_vec <- rep(s, length.out = n_tips)
+  dat <- .tbm_align_data(tree, x, s_vec)
+  y <- dat$y
+  sv <- dat$s
+  s2 <- sv^2
+  tip.label <- dat$tip.label
+
+  # Build tree index for message passing
+  idx <- .tbm_build_index(tree)
+
+  # Validate g_init
+  if (inherits(g_init, "ebnm")) {
+    g_init <- g_init[["fitted_g"]]
+  }
+  if (!is.null(g_init) && !inherits(g_init, "tree_bm")) {
+    stop("g_init must be an object of class 'tree_bm'.")
+  }
+  if (fix_g && is.null(g_init)) {
+    stop("g_init must be provided when fix_g = TRUE.")
+  }
+
+  # Determine bm_var: fixed or optimized
+  if (fix_g) {
+    bm_var_hat <- g_init$bm_var
+    fit <- tree_bm_compute_cpp(
+      ntip = idx$ntip,
+      total_nodes = idx$total_nodes,
+      root = idx$root,
+      y = y,
+      s2 = s2,
+      edge_len_to_child = idx$edge_len_to_child,
+      children = idx$children,
+      internal_post = idx$internal_post,
+      internal_pre = idx$internal_pre,
+      bm_var = bm_var_hat
+    )
+    loglik_val <- fit$loglik
+  } else {
+    loglik_fn <- function(bm_var) {
+      tree_bm_compute_cpp(
+        ntip = idx$ntip,
+        total_nodes = idx$total_nodes,
+        root = idx$root,
+        y = y,
+        s2 = s2,
+        edge_len_to_child = idx$edge_len_to_child,
+        children = idx$children,
+        internal_post = idx$internal_post,
+        internal_pre = idx$internal_pre,
+        bm_var = bm_var
+      )$loglik
+    }
+
+    lower_bm_var <- 1e-10
+    upper_bm_var <- .tbm_upper_bm_var(y, idx)
+
+    opt_args <- c(
+      list(
+        f = loglik_fn,
+        lower = lower_bm_var,
+        upper = upper_bm_var,
+        maximum = TRUE
+      ),
+      if (!is.null(control)) control else list()
+    )
+    opt <- do.call(stats::optimize, opt_args)
+
+    bm_var_hat <- opt$maximum
+    loglik_val <- opt$objective
+
+    # Final posterior at optimum
+    fit <- tree_bm_compute_cpp(
+      ntip = idx$ntip,
+      total_nodes = idx$total_nodes,
+      root = idx$root,
+      y = y,
+      s2 = s2,
+      edge_len_to_child = idx$edge_len_to_child,
+      children = idx$children,
+      internal_post = idx$internal_post,
+      internal_pre = idx$internal_pre,
+      bm_var = bm_var_hat
+    )
+  }
+
+  # Posterior summaries
+  post_mean <- stats::setNames(fit$post_tip_mean, tip.label)
+  post_var  <- stats::setNames(fit$post_tip_var, tip.label)
+  post_sd   <- sqrt(post_var)
+
+  # Named data vectors (in tip.label order) for output helpers
+  y_named <- stats::setNames(y, tip.label)
+  s_named <- stats::setNames(sv, tip.label)
+
+  retlist <- list()
+
+  if (data_in_output(output)) {
+    retlist <- add_data_to_retlist(retlist, y_named, s_named)
+  }
+
+  if (posterior_in_output(output)) {
+    posterior <- list()
+    if (result_in_output(output)) {
+      posterior$mean  <- post_mean
+      posterior$sd    <- post_sd
+      posterior$mean2 <- post_mean^2 + post_var
+    }
+    if (lfsr_in_output(output)) {
+      posterior$lfsr <- stats::pnorm(0, abs(post_mean), post_sd)
+    }
+    retlist <- add_posterior_to_retlist(retlist, posterior, output, y_named)
+  }
+
+  if (g_in_output(output)) {
+    retlist <- add_g_to_retlist(retlist, tree_bm(bm_var_hat))
+  }
+
+  if (llik_in_output(output)) {
+    df <- if (fix_g) 0L else 1L
+    retlist <- add_llik_to_retlist(retlist, loglik_val, y_named, df = df)
+  }
+
+  if (sampler_in_output(output)) {
+    warning("Posterior sampler is not implemented for ebnm_tree_bm.")
+  }
+
+  return(as_ebnm(retlist, call))
+}
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+.tbm_align_data <- function(tree, y, s) {
+  if (!inherits(tree, "phylo")) {
+    stop("tree must be an object of class 'phylo'.")
+  }
+  if (!ape::is.rooted(tree)) {
+    stop("tree must be rooted.")
+  }
+
+  n <- ape::Ntip(tree)
+  if (length(y) != n || length(s) != n) {
+    stop("y and s must each have length equal to the number of tips in tree.")
+  }
+
+  if (!is.null(names(y)) || !is.null(names(s))) {
+    if (is.null(names(y)) || is.null(names(s))) {
+      stop("If either y or s is named, both must be named.")
+    }
+    if (!all(tree$tip.label %in% names(y))) {
+      stop("All tree tip labels must appear in names(y).")
+    }
+    if (!all(tree$tip.label %in% names(s))) {
+      stop("All tree tip labels must appear in names(s).")
+    }
+    y <- y[tree$tip.label]
+    s <- s[tree$tip.label]
+  } else {
+    names(y) <- tree$tip.label
+    names(s) <- tree$tip.label
+  }
+
+  if (any(!is.finite(y))) stop("x contains non-finite values.")
+  if (any(!is.finite(s))) stop("s contains non-finite values.")
+  if (any(s <= 0)) stop("All s must be strictly positive.")
+
+  list(y = as.numeric(y), s = as.numeric(s), tip.label = tree$tip.label)
+}
+
+.tbm_build_index <- function(tree) {
+  ntip  <- ape::Ntip(tree)
+  nnode <- tree$Nnode
+  total_nodes <- ntip + nnode
+
+  edge     <- tree$edge
+  edge_len <- tree$edge.length
+
+  root <- setdiff(edge[, 1], edge[, 2])
+  if (length(root) != 1L) {
+    stop("Could not identify a unique root node.")
+  }
+
+  edge_len_to_child <- rep(NA_real_, total_nodes)
+  children <- vector("list", total_nodes)
+
+  for (i in seq_len(nrow(edge))) {
+    p  <- edge[i, 1]
+    ch <- edge[i, 2]
+    edge_len_to_child[ch] <- edge_len[i]
+    children[[p]] <- c(children[[p]], ch)
+  }
+
+  # Postorder: process children before parents
+  tree_post  <- ape::reorder.phylo(tree, order = "postorder")
+  post_pars  <- tree_post$edge[, 1]
+  internal_post <- post_pars[!duplicated(post_pars, fromLast = TRUE)]
+
+  # Preorder: process parents before children
+  tree_pre   <- ape::reorder.phylo(tree, order = "cladewise")
+  internal_pre <- unique(tree_pre$edge[, 1])
+
+  list(
+    ntip          = ntip,
+    nnode         = nnode,
+    total_nodes   = total_nodes,
+    root          = root,
+    edge_len_to_child = edge_len_to_child,
+    children      = children,
+    internal_post = internal_post,
+    internal_pre  = internal_pre
+  )
+}
+
+# Upper bound for bm_var search: data variance divided by minimum edge length.
+# Any bm_var beyond this would make the prior variance at every tip far exceed
+# the observed variance, so the MLE cannot lie above it.
+.tbm_upper_bm_var <- function(y, idx) {
+  valid_len <- idx$edge_len_to_child[!is.na(idx$edge_len_to_child)]
+  min_edge  <- max(min(valid_len), 1e-8)
+  max(stats::var(y) / min_edge, 1.0)
+}

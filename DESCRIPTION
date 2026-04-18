@@ -18,7 +18,7 @@ Description: Provides simple, fast, and stable functions to fit the normal
     Willwerscheid, Carbonetto, and Stephens (2025) <doi:10.18637/jss.v114.i03>,
     provides a detailed introduction to the package.
 License: GPL (>=3)
-NeedsCompilation: no
+NeedsCompilation: yes
 Depends: R (>= 3.3.0)
 Imports:
     stats,
@@ -30,16 +30,19 @@ Imports:
     magrittr,
     rlang,
     dplyr,
-    ggplot2
-Suggests: 
-    testthat, 
+    ggplot2,
+    Rcpp
+LinkingTo: Rcpp
+Suggests:
+    testthat,
     REBayes,
     horseshoe,
+    ape,
     knitr,
     rmarkdown,
     cowplot,
     mcmc,
     numDeriv
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 VignetteBuilder: knitr
 LazyData: true
