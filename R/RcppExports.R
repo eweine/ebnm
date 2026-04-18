@@ -5,3 +5,7 @@ tree_bm_compute_cpp <- function(ntip, total_nodes, root, y, s2, edge_len_to_chil
     .Call(`_ebnm_tree_bm_compute_cpp`, ntip, total_nodes, root, y, s2, edge_len_to_child, children, internal_post, internal_pre, bm_var)
 }
 
+tree_ou_compute_cpp <- function(ntip, total_nodes, root, y, s2, edge_len_to_child, children, internal_post, internal_pre, alpha, stationary_var) {
+    .Call(`_ebnm_tree_ou_compute_cpp`, ntip, total_nodes, root, y, s2, edge_len_to_child, children, internal_post, internal_pre, alpha, stationary_var)
+}
+

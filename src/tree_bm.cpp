@@ -181,3 +181,130 @@ List tree_bm_compute_cpp(
     Named("post_tip_var") = post_tip_var
   );
 }
+
+// Upward + downward message passing on the tree for a stationary OU prior.
+//
+// Transition model along an edge of length ell:
+//   x_child | x_parent ~ N(a * x_parent, q)
+// where a = exp(-alpha * ell) and q = stationary_var * (1 - a^2).
+// Root prior:
+//   x_root ~ N(0, stationary_var)
+//
+// [[Rcpp::export]]
+List tree_ou_compute_cpp(
+    int ntip,
+    int total_nodes,
+    int root,
+    NumericVector y,
+    NumericVector s2,
+    NumericVector edge_len_to_child,
+    List children,
+    IntegerVector internal_post,
+    IntegerVector internal_pre,
+    double alpha,
+    double stationary_var
+) {
+  int r = root - 1;
+
+  NumericVector up_mean(total_nodes);
+  NumericVector up_var(total_nodes);
+  NumericVector up_logconst(total_nodes, 0.0);
+
+  for (int i = 0; i < ntip; ++i) {
+    up_mean[i] = y[i];
+    up_var[i] = s2[i];
+  }
+
+  int n_post = internal_post.size();
+  for (int ki = 0; ki < n_post; ++ki) {
+    int v = internal_post[ki] - 1;
+    IntegerVector ch_r = as<IntegerVector>(children[v]);
+    int nch = ch_r.size();
+    if (nch == 0) continue;
+
+    std::vector<double> msg_means(nch), msg_vars(nch);
+    double sum_lc = 0.0;
+    for (int j = 0; j < nch; ++j) {
+      int c = ch_r[j] - 1;
+      double ell = edge_len_to_child[c];
+      double a = std::exp(-alpha * ell);
+      double q = stationary_var * (1.0 - a * a);
+      double child_var = up_var[c] + q;
+      msg_means[j] = up_mean[c] / a;
+      msg_vars[j] = child_var / (a * a);
+      sum_lc += up_logconst[c] - std::log(a);
+    }
+
+    GaussMsg comb = combine_messages(msg_means, msg_vars);
+    up_mean[v] = comb.mean;
+    up_var[v] = comb.var;
+    up_logconst[v] = sum_lc + comb.log_const;
+  }
+
+  std::vector<double> root_means(2), root_vars(2);
+  root_means[0] = 0.0;
+  root_vars[0] = stationary_var;
+  root_means[1] = up_mean[r];
+  root_vars[1] = up_var[r];
+  GaussMsg root_comb = combine_messages(root_means, root_vars);
+  double loglik = up_logconst[r] + root_comb.log_const;
+
+  NumericVector out_mean(total_nodes, 0.0);
+  NumericVector out_var(total_nodes, 0.0);
+  out_mean[r] = 0.0;
+  out_var[r] = stationary_var;
+
+  int n_pre = internal_pre.size();
+  for (int ki = 0; ki < n_pre; ++ki) {
+    int p = internal_pre[ki] - 1;
+    IntegerVector ch_r_vec = as<IntegerVector>(children[p]);
+    int nch = ch_r_vec.size();
+    if (nch == 0) continue;
+
+    std::vector<int> ch_0(nch);
+    std::vector<double> msg_means(nch), msg_vars(nch);
+    for (int j = 0; j < nch; ++j) {
+      int c = ch_r_vec[j] - 1;
+      double ell = edge_len_to_child[c];
+      double a = std::exp(-alpha * ell);
+      double q = stationary_var * (1.0 - a * a);
+      ch_0[j] = c;
+      msg_means[j] = up_mean[c] / a;
+      msg_vars[j] = (up_var[c] + q) / (a * a);
+    }
+
+    for (int j = 0; j < nch; ++j) {
+      int c = ch_0[j];
+      std::vector<double> excl_means, excl_vars;
+      excl_means.push_back(out_mean[p]);
+      excl_vars.push_back(out_var[p]);
+      for (int k = 0; k < nch; ++k) {
+        if (k != j) {
+          excl_means.push_back(msg_means[k]);
+          excl_vars.push_back(msg_vars[k]);
+        }
+      }
+
+      GaussMsg comb_excl = combine_messages(excl_means, excl_vars);
+      double ell = edge_len_to_child[c];
+      double a = std::exp(-alpha * ell);
+      double q = stationary_var * (1.0 - a * a);
+      out_mean[c] = a * comb_excl.mean;
+      out_var[c] = q + a * a * comb_excl.var;
+    }
+  }
+
+  NumericVector post_tip_mean(ntip), post_tip_var(ntip);
+  for (int i = 0; i < ntip; ++i) {
+    double prec = 1.0 / out_var[i] + 1.0 / up_var[i];
+    post_tip_var[i] = 1.0 / prec;
+    post_tip_mean[i] = post_tip_var[i] *
+      (out_mean[i] / out_var[i] + up_mean[i] / up_var[i]);
+  }
+
+  return List::create(
+    Named("loglik") = loglik,
+    Named("post_tip_mean") = post_tip_mean,
+    Named("post_tip_var") = post_tip_var
+  );
+}
