@@ -101,46 +101,16 @@ tree_bm_precomp <- function(tree) {
   children <- vector("list", total_nodes)
   internal_post <- integer()
   internal_pre <- integer()
+  tree_tip_idx <- vector("list", length(trees))
+  subindex <- vector("list", length(trees))
   tip_offset <- 0L
   internal_offset <- 0L
 
   for (tt in seq_along(trees)) {
     tr <- trees[[tt]]
-    if (!ape::is.rooted(tr)) {
-      stop("Each tree must be rooted.")
-    }
-    if (is.null(tr$edge.length)) {
-      stop("Each tree must have branch lengths.")
-    }
-    if (any(!is.finite(tr$edge.length)) || any(tr$edge.length <= 0)) {
-      stop("All branch lengths must be finite and strictly positive.")
-    }
-
+    local_idx <- .tree_single_precomp(tr)
     ntip <- tree_ntip[[tt]]
     nnode <- tree_nnode[[tt]]
-
-    edge <- tr$edge
-    edge_len <- tr$edge.length
-    root <- setdiff(edge[, 1], edge[, 2])
-    if (length(root) != 1L) {
-      stop("Could not identify a unique root node.")
-    }
-
-    edge_len_local <- rep(NA_real_, ntip + nnode)
-    children_local <- vector("list", ntip + nnode)
-    for (i in seq_len(nrow(edge))) {
-      p <- edge[i, 1]
-      ch <- edge[i, 2]
-      edge_len_local[ch] <- edge_len[i]
-      children_local[[p]] <- c(children_local[[p]], ch)
-    }
-
-    tree_post <- ape::reorder.phylo(tr, order = "postorder")
-    post_pars <- tree_post$edge[, 1]
-    internal_post_local <- post_pars[!duplicated(post_pars, fromLast = TRUE)]
-
-    tree_pre <- ape::reorder.phylo(tr, order = "cladewise")
-    internal_pre_local <- unique(tree_pre$edge[, 1])
 
     map_node <- function(node_id) {
       ifelse(
@@ -150,15 +120,17 @@ tree_bm_precomp <- function(tree) {
       )
     }
 
-    roots <- c(roots, unname(map_node(root)))
+    roots <- c(roots, unname(map_node(local_idx$root)))
     tip_labels <- c(tip_labels, tr$tip.label)
     mapped_nodes <- unname(map_node(seq_len(ntip + nnode)))
-    edge_len_to_child[mapped_nodes] <- edge_len_local
-    children[mapped_nodes] <- lapply(children_local, function(ch) {
+    edge_len_to_child[mapped_nodes] <- local_idx$edge_len_to_child
+    children[mapped_nodes] <- lapply(local_idx$children, function(ch) {
       if (length(ch) == 0L) integer() else unname(map_node(ch))
     })
-    internal_post <- c(internal_post, unname(map_node(internal_post_local)))
-    internal_pre <- c(internal_pre, unname(map_node(internal_pre_local)))
+    internal_post <- c(internal_post, unname(map_node(local_idx$internal_post)))
+    internal_pre <- c(internal_pre, unname(map_node(local_idx$internal_pre)))
+    tree_tip_idx[[tt]] <- seq.int(tip_offset + 1L, tip_offset + ntip)
+    subindex[[tt]] <- local_idx
 
     tip_offset <- tip_offset + ntip
     internal_offset <- internal_offset + nnode
@@ -175,6 +147,61 @@ tree_bm_precomp <- function(tree) {
     root = roots,
     n_tree = length(trees),
     tip.label = tip_labels,
+    tree_tip_idx = tree_tip_idx,
+    subindex = subindex,
+    edge_len_to_child = edge_len_to_child,
+    children = children,
+    internal_post = internal_post,
+    internal_pre = internal_pre
+  )
+}
+
+.tree_single_precomp <- function(tree) {
+  if (!inherits(tree, "phylo")) {
+    stop("tree must be an object of class 'phylo'.")
+  }
+  if (!ape::is.rooted(tree)) {
+    stop("Each tree must be rooted.")
+  }
+  if (is.null(tree$edge.length)) {
+    stop("Each tree must have branch lengths.")
+  }
+  if (any(!is.finite(tree$edge.length)) || any(tree$edge.length <= 0)) {
+    stop("All branch lengths must be finite and strictly positive.")
+  }
+
+  ntip <- ape::Ntip(tree)
+  nnode <- tree$Nnode
+  edge <- tree$edge
+  edge_len <- tree$edge.length
+
+  root <- setdiff(edge[, 1], edge[, 2])
+  if (length(root) != 1L) {
+    stop("Could not identify a unique root node.")
+  }
+
+  edge_len_to_child <- rep(NA_real_, ntip + nnode)
+  children <- vector("list", ntip + nnode)
+  for (i in seq_len(nrow(edge))) {
+    p <- edge[i, 1]
+    ch <- edge[i, 2]
+    edge_len_to_child[ch] <- edge_len[i]
+    children[[p]] <- c(children[[p]], ch)
+  }
+
+  tree_post <- ape::reorder.phylo(tree, order = "postorder")
+  post_pars <- tree_post$edge[, 1]
+  internal_post <- post_pars[!duplicated(post_pars, fromLast = TRUE)]
+
+  tree_pre <- ape::reorder.phylo(tree, order = "cladewise")
+  internal_pre <- unique(tree_pre$edge[, 1])
+
+  list(
+    ntip = ntip,
+    nnode = nnode,
+    total_nodes = ntip + nnode,
+    root = root,
+    tip.label = tree$tip.label,
     edge_len_to_child = edge_len_to_child,
     children = children,
     internal_post = internal_post,
