@@ -24,7 +24,8 @@ tree_bm <- function(bm_var) {
 #' \code{tree_index} are captured in the closure, so they are built only once
 #' even when the function is called many times inside an iterative algorithm.
 #'
-#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}.
+#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}},
+#'   or a list of rooted \code{phylo} objects representing independent trees.
 #' @param tree_index An optional pre-computed index from
 #'   \code{\link{tree_bm_precomp}}. If \code{NULL} (default), it is built
 #'   automatically from \code{tree}.
@@ -62,13 +63,14 @@ ebnm_tree_bm_fn <- function(tree, tree_index = NULL) {
 
 #' Pre-compute tree structure for repeated ebnm_tree_bm calls
 #'
-#' Builds the message-passing index for a phylogenetic tree. Passing this
+#' Builds the message-passing index for a phylogenetic tree or forest. Passing this
 #' pre-computed index to \code{\link{ebnm_tree_bm}} via the \code{tree_index}
 #' argument avoids rebuilding it on every call, which is important when
 #' \code{ebnm_tree_bm} is used iteratively (e.g., as a prior in an
 #' alternating optimization).
 #'
-#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}.
+#' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}},
+#'   or a list of rooted \code{phylo} objects representing independent trees.
 #'
 #' @return A list of class \code{tree_bm_index} containing the pre-computed
 #'   tree structure needed by \code{\link{ebnm_tree_bm}}.
@@ -86,52 +88,97 @@ tree_bm_precomp <- function(tree) {
   if (!requireNamespace("ape", quietly = TRUE)) {
     stop("Package 'ape' must be installed to pre-compute tree structure.")
   }
-  if (!inherits(tree, "phylo")) {
-    stop("tree must be an object of class 'phylo'.")
-  }
-  if (!ape::is.rooted(tree)) {
-    stop("tree must be rooted.")
-  }
+  trees <- .tree_as_list(tree)
+  tree_ntip <- vapply(trees, ape::Ntip, integer(1))
+  tree_nnode <- vapply(trees, `[[`, integer(1), "Nnode")
+  ntip_total <- sum(tree_ntip)
+  nnode_total <- sum(tree_nnode)
+  total_nodes <- ntip_total + nnode_total
 
-  ntip  <- ape::Ntip(tree)
-  nnode <- tree$Nnode
-  total_nodes <- ntip + nnode
-
-  edge     <- tree$edge
-  edge_len <- tree$edge.length
-
-  root <- setdiff(edge[, 1], edge[, 2])
-  if (length(root) != 1L) {
-    stop("Could not identify a unique root node.")
-  }
-
+  roots <- integer()
+  tip_labels <- character()
   edge_len_to_child <- rep(NA_real_, total_nodes)
   children <- vector("list", total_nodes)
+  internal_post <- integer()
+  internal_pre <- integer()
+  tip_offset <- 0L
+  internal_offset <- 0L
 
-  for (i in seq_len(nrow(edge))) {
-    p  <- edge[i, 1]
-    ch <- edge[i, 2]
-    edge_len_to_child[ch] <- edge_len[i]
-    children[[p]] <- c(children[[p]], ch)
+  for (tt in seq_along(trees)) {
+    tr <- trees[[tt]]
+    if (!ape::is.rooted(tr)) {
+      stop("Each tree must be rooted.")
+    }
+    if (is.null(tr$edge.length)) {
+      stop("Each tree must have branch lengths.")
+    }
+    if (any(!is.finite(tr$edge.length)) || any(tr$edge.length <= 0)) {
+      stop("All branch lengths must be finite and strictly positive.")
+    }
+
+    ntip <- tree_ntip[[tt]]
+    nnode <- tree_nnode[[tt]]
+
+    edge <- tr$edge
+    edge_len <- tr$edge.length
+    root <- setdiff(edge[, 1], edge[, 2])
+    if (length(root) != 1L) {
+      stop("Could not identify a unique root node.")
+    }
+
+    edge_len_local <- rep(NA_real_, ntip + nnode)
+    children_local <- vector("list", ntip + nnode)
+    for (i in seq_len(nrow(edge))) {
+      p <- edge[i, 1]
+      ch <- edge[i, 2]
+      edge_len_local[ch] <- edge_len[i]
+      children_local[[p]] <- c(children_local[[p]], ch)
+    }
+
+    tree_post <- ape::reorder.phylo(tr, order = "postorder")
+    post_pars <- tree_post$edge[, 1]
+    internal_post_local <- post_pars[!duplicated(post_pars, fromLast = TRUE)]
+
+    tree_pre <- ape::reorder.phylo(tr, order = "cladewise")
+    internal_pre_local <- unique(tree_pre$edge[, 1])
+
+    map_node <- function(node_id) {
+      ifelse(
+        node_id <= ntip,
+        tip_offset + node_id,
+        ntip_total + internal_offset + (node_id - ntip)
+      )
+    }
+
+    roots <- c(roots, unname(map_node(root)))
+    tip_labels <- c(tip_labels, tr$tip.label)
+    mapped_nodes <- unname(map_node(seq_len(ntip + nnode)))
+    edge_len_to_child[mapped_nodes] <- edge_len_local
+    children[mapped_nodes] <- lapply(children_local, function(ch) {
+      if (length(ch) == 0L) integer() else unname(map_node(ch))
+    })
+    internal_post <- c(internal_post, unname(map_node(internal_post_local)))
+    internal_pre <- c(internal_pre, unname(map_node(internal_pre_local)))
+
+    tip_offset <- tip_offset + ntip
+    internal_offset <- internal_offset + nnode
   }
 
-  tree_post     <- ape::reorder.phylo(tree, order = "postorder")
-  post_pars     <- tree_post$edge[, 1]
-  internal_post <- post_pars[!duplicated(post_pars, fromLast = TRUE)]
-
-  tree_pre     <- ape::reorder.phylo(tree, order = "cladewise")
-  internal_pre <- unique(tree_pre$edge[, 1])
+  if (anyDuplicated(tip_labels)) {
+    stop("Tip labels must be unique across all trees.")
+  }
 
   list(
-    ntip              = ntip,
-    nnode             = nnode,
-    total_nodes       = total_nodes,
-    root              = root,
-    tip.label         = tree$tip.label,
+    ntip = ntip_total,
+    nnode = nnode_total,
+    total_nodes = total_nodes,
+    root = roots,
+    n_tree = length(trees),
+    tip.label = tip_labels,
     edge_len_to_child = edge_len_to_child,
-    children          = children,
-    internal_post     = internal_post,
-    internal_pre      = internal_pre
+    children = children,
+    internal_post = internal_post,
+    internal_pre = internal_pre
   )
 }
 
@@ -139,7 +186,7 @@ tree_bm_precomp <- function(tree) {
 #'
 #' Implements an empirical Bayes normal means solver where the prior on tip
 #' states is induced by a Brownian motion process unfolding on a phylogenetic
-#' tree. The root state is fixed at zero, and a single variance parameter
+#' tree or forest. Each root state is fixed at zero, and a single variance parameter
 #' \eqn{\sigma^2} (the diffusion variance per unit branch length) is estimated
 #' by marginal maximum likelihood.
 #'
@@ -162,8 +209,9 @@ tree_bm_precomp <- function(tree) {
 #'   strictly positive. Vectors of any other length are an error.
 #'
 #' @param tree A rooted phylogenetic tree of class \code{\link[ape]{phylo}}
-#'   (from package \code{ape}). Must be rooted and have positive branch
-#'   lengths.
+#'   (from package \code{ape}), or a list of rooted \code{phylo} objects.
+#'   Trees must be rooted and have positive branch lengths. Different trees
+#'   are modeled as prior-independent.
 #'
 #' @param tree_index An optional pre-computed index returned by
 #'   \code{\link{tree_bm_precomp}}. When \code{ebnm_tree_bm} is called
@@ -249,7 +297,7 @@ ebnm_tree_bm <- function(
     fit <- tree_bm_compute_cpp(
       ntip = idx$ntip,
       total_nodes = idx$total_nodes,
-      root = idx$root,
+      roots = idx$root,
       y = y,
       s2 = s2,
       edge_len_to_child = idx$edge_len_to_child,
@@ -264,7 +312,7 @@ ebnm_tree_bm <- function(
       tree_bm_compute_cpp(
         ntip = idx$ntip,
         total_nodes = idx$total_nodes,
-        root = idx$root,
+        roots = idx$root,
         y = y,
         s2 = s2,
         edge_len_to_child = idx$edge_len_to_child,
@@ -296,7 +344,7 @@ ebnm_tree_bm <- function(
     fit <- tree_bm_compute_cpp(
       ntip = idx$ntip,
       total_nodes = idx$total_nodes,
-      root = idx$root,
+      roots = idx$root,
       y = y,
       s2 = s2,
       edge_len_to_child = idx$edge_len_to_child,
@@ -356,14 +404,17 @@ ebnm_tree_bm <- function(
 # ---------------------------------------------------------------------------
 
 .tbm_align_data <- function(tree, y, s) {
-  if (!inherits(tree, "phylo")) {
-    stop("tree must be an object of class 'phylo'.")
-  }
-  if (!ape::is.rooted(tree)) {
-    stop("tree must be rooted.")
+  trees <- .tree_as_list(tree)
+  if (any(!vapply(trees, ape::is.rooted, logical(1)))) {
+    stop("Each tree must be rooted.")
   }
 
-  n <- ape::Ntip(tree)
+  tip_label <- unlist(lapply(trees, `[[`, "tip.label"), use.names = FALSE)
+  if (anyDuplicated(tip_label)) {
+    stop("Tip labels must be unique across all trees.")
+  }
+
+  n <- length(tip_label)
   s_scalar <- (length(s) == 1L)
   if (s_scalar) s <- rep(s, n)
 
@@ -372,18 +423,24 @@ ebnm_tree_bm <- function(
   }
 
   if (!is.null(names(y))) {
-    if (!all(tree$tip.label %in% names(y))) {
-      stop("All tree tip labels must appear in names(y).")
+    if (anyDuplicated(names(y))) {
+      stop("names(x) must be unique.")
+    }
+    if (!all(tip_label %in% names(y))) {
+      stop("All tree tip labels must appear in names(x).")
     }
     # Permutation that puts y into tree$tip.label order
-    perm <- match(tree$tip.label, names(y))
+    perm <- match(tip_label, names(y))
     y <- y[perm]
     if (!is.null(names(s)) && !s_scalar) {
       # s is a named vector: reorder it independently by name
-      if (!all(tree$tip.label %in% names(s))) {
+      if (anyDuplicated(names(s))) {
+        stop("names(s) must be unique.")
+      }
+      if (!all(tip_label %in% names(s))) {
         stop("All tree tip labels must appear in names(s).")
       }
-      s <- s[tree$tip.label]
+      s <- s[tip_label]
     } else {
       # s is a scalar (already expanded) or unnamed vector: apply same
       # permutation as y so that s[i] stays paired with its y[i]
@@ -392,15 +449,15 @@ ebnm_tree_bm <- function(
   } else if (!is.null(names(s)) && !s_scalar) {
     stop("If s is a named vector, y must also be named.")
   } else {
-    names(y) <- tree$tip.label
-    names(s) <- tree$tip.label
+    names(y) <- tip_label
+    names(s) <- tip_label
   }
 
   if (any(!is.finite(y))) stop("x contains non-finite values.")
   if (any(!is.finite(s))) stop("s contains non-finite values.")
   if (any(s <= 0)) stop("All s must be strictly positive.")
 
-  list(y = as.numeric(y), s = as.numeric(s), tip.label = tree$tip.label)
+  list(y = as.numeric(y), s = as.numeric(s), tip.label = tip_label)
 }
 
 # Upper bound for bm_var search: data variance divided by minimum edge length.
@@ -410,4 +467,14 @@ ebnm_tree_bm <- function(
   valid_len <- idx$edge_len_to_child[!is.na(idx$edge_len_to_child)]
   min_edge  <- max(min(valid_len), 1e-8)
   max(stats::var(y) / min_edge, 1.0)
+}
+
+.tree_as_list <- function(tree) {
+  if (inherits(tree, "phylo")) {
+    return(list(tree))
+  }
+  if (!is.list(tree) || length(tree) == 0L || !all(vapply(tree, inherits, logical(1), "phylo"))) {
+    stop("tree must be a 'phylo' object or a non-empty list of 'phylo' objects.")
+  }
+  tree
 }
